@@ -1,4 +1,4 @@
-import type { RoutePoint, Vehicle, VehicleSource } from "@/types/vehicle";
+import type { RoutePoint, Vehicle, VehicleRouteRequest, VehicleSource } from "@/types/vehicle";
 import { Pool } from "pg";
 
 declare global {
@@ -75,6 +75,21 @@ async function ensureSchema(): Promise<void> {
           ROUND((ST_Y(position::geometry))::numeric, 6),
           ROUND((ST_X(position::geometry))::numeric, 6)
         );
+
+      CREATE TABLE IF NOT EXISTS vehicle_routes (
+        route_key TEXT PRIMARY KEY,
+        num1 TEXT NOT NULL,
+        num2 TEXT NOT NULL,
+        cat INTEGER NOT NULL,
+        carrier TEXT,
+        route JSONB NOT NULL,
+        stops JSONB NOT NULL,
+        geometry_available BOOLEAN NOT NULL,
+        fetched_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_vehicle_routes_fetched
+        ON vehicle_routes (fetched_at DESC);
     `)
       .then(() => {
         globalThis.__ostravaTramDbUnavailableUntil = undefined;
@@ -87,6 +102,125 @@ async function ensureSchema(): Promise<void> {
   }
 
   await globalThis.__ostravaTramSchemaReady;
+}
+
+function getRouteKey(routeRequest: VehicleRouteRequest): string {
+  return [
+    routeRequest.cat,
+    routeRequest.num1,
+    routeRequest.num2,
+    routeRequest.carrier ?? 0
+  ].map((part) => String(part)).join(":");
+}
+
+function isRoutePoint(value: unknown): value is RoutePoint {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const candidate = value as Partial<RoutePoint>;
+  return typeof candidate.lat === "number" && typeof candidate.lng === "number";
+}
+
+function normalizeRoutePoints(value: unknown): RoutePoint[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter(isRoutePoint);
+}
+
+export async function getCachedVehicleRoute(routeRequest: VehicleRouteRequest): Promise<{
+  route: RoutePoint[];
+  stops: RoutePoint[];
+  geometryAvailable: boolean;
+} | null> {
+  const pool = getPool();
+
+  if (!pool) {
+    return null;
+  }
+
+  await ensureSchema();
+
+  const result = await pool.query<{
+    route: unknown;
+    stops: unknown;
+    geometry_available: boolean;
+  }>(
+    `
+      SELECT route, stops, geometry_available
+      FROM vehicle_routes
+      WHERE route_key = $1
+      LIMIT 1;
+    `,
+    [getRouteKey(routeRequest)]
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  const route = normalizeRoutePoints(row.route);
+  const stops = normalizeRoutePoints(row.stops);
+
+  if (route.length < 2) {
+    return null;
+  }
+
+  return {
+    route,
+    stops,
+    geometryAvailable: row.geometry_available
+  };
+}
+
+export async function saveVehicleRoute(
+  routeRequest: VehicleRouteRequest,
+  route: RoutePoint[],
+  stops: RoutePoint[],
+  geometryAvailable: boolean
+): Promise<void> {
+  const pool = getPool();
+
+  if (!pool || route.length < 2) {
+    return;
+  }
+
+  await ensureSchema();
+
+  await pool.query(
+    `
+      INSERT INTO vehicle_routes (
+        route_key,
+        num1,
+        num2,
+        cat,
+        carrier,
+        route,
+        stops,
+        geometry_available,
+        fetched_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, now())
+      ON CONFLICT (route_key) DO UPDATE SET
+        route = EXCLUDED.route,
+        stops = EXCLUDED.stops,
+        geometry_available = EXCLUDED.geometry_available,
+        fetched_at = EXCLUDED.fetched_at;
+    `,
+    [
+      getRouteKey(routeRequest),
+      routeRequest.num1,
+      routeRequest.num2,
+      routeRequest.cat,
+      routeRequest.carrier === undefined || routeRequest.carrier === null ? null : String(routeRequest.carrier),
+      JSON.stringify(route),
+      JSON.stringify(stops),
+      geometryAvailable
+    ]
+  );
 }
 
 export async function saveVehiclePositions(vehicles: Vehicle[], source: VehicleSource): Promise<void> {

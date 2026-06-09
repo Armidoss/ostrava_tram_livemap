@@ -18,6 +18,7 @@ Webový prototyp pro sledování aktuálních poloh vozidel MHD v Ostravě. Apli
 - stale režim: vozidla zmizelá z odpovědi zůstávají ještě 30 sekund šedá
 - jednoduchý výpočet headingu markeru funkcí `calculateBearing()`
 - klik na vozidlo načte dostupnou trasu z reverse-engineered MPVnet `map/getRoute`
+- úspěšně načtené trasy se ukládají do PostGIS cache podle parametrů linky/spoje
 - volitelné ukládání poloh do PostGIS, takže kliknuté vozidlo může zobrazit historickou GPS stopu i po refreshi stránky
 
 ## Zdroj dat
@@ -55,6 +56,7 @@ docker compose up -d
 
 Databáze používá image `postgis/postgis:16-3.4` a inicializační migraci v `db/migrations/001_init.sql`.
 Tabulka `vehicle_positions` ukládá ID vozidla, linku, typ, zpoždění, cíl, zdroj dat, čas pozorování, surový JSON a geometrii `GEOGRAPHY(Point, 4326)`.
+Tabulka `vehicle_routes` ukládá geometrii a zastávky tras načtených přes MPVnet, takže opakovaný klik na stejný spoj může použít lokální cache.
 
 Ukládání běží automaticky při každém pollingu `GET /api/vehicles`. Pokud databáze není dostupná, aplikace pokračuje bez pádu a pouze přeskočí persistenci.
 

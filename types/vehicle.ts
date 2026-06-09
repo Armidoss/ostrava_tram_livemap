@@ -36,7 +36,7 @@ export type RoutePoint = {
 };
 
 export type VehicleRouteResponse = {
-  source: "mpvnet" | "unavailable";
+  source: "mpvnet" | "cache" | "unavailable";
   route: RoutePoint[];
   stops: RoutePoint[];
   geometryAvailable: boolean;
