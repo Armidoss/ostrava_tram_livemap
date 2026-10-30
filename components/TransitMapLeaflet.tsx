@@ -18,6 +18,7 @@ const OSTRAVA_CENTER: [number, number] = [49.8209, 18.2625];
 const STALE_TTL_MS = 30000;
 const TRAIL_TTL_MS = 30 * 60 * 1000;
 const REFRESH_SECONDS = 10;
+const INITIAL_FAST_REFRESH_MS = 2000;
 const ANIMATION_DURATION_MULTIPLIER = 1.15;
 
 type VehicleAnimation = {
@@ -51,6 +52,19 @@ type SelectedRouteState = {
 function getTrailPointKey(point: RoutePoint | TrailPoint, index: number): string {
   const label = "timestamp" in point ? point.timestamp : point.name ?? "trail";
   return `${label}-${point.lat}-${point.lng}-${index}`;
+}
+
+function getRouteColor(type: Vehicle["type"]): string {
+  switch (type) {
+    case "bus":
+      return "#38bdf8";
+    case "trolleybus":
+      return "#22c55e";
+    case "tram":
+      return "#f97316";
+    default:
+      return "#e2e8f0";
+  }
 }
 
 export function calculateBearing(fromLat: number, fromLng: number, toLat: number, toLng: number): number {
@@ -290,8 +304,10 @@ export default function TransitMap() {
     }
   }, []);
 
-  const fetchVehicles = useCallback(async () => {
-    setLoading(true);
+  const fetchVehicles = useCallback(async (showLoading = true): Promise<boolean> => {
+    if (showLoading) {
+      setLoading(true);
+    }
 
     try {
       const response = await fetch("/api/vehicles", { cache: "no-store" });
@@ -305,6 +321,7 @@ export default function TransitMap() {
       setError(data.error ?? null);
       setLastRefresh(new Date());
       applyIncomingVehicles(data.vehicles);
+      return true;
     } catch (fetchError) {
       const message = fetchError instanceof Error ? fetchError.message : "Neznámá chyba načítání.";
 
@@ -314,18 +331,36 @@ export default function TransitMap() {
 
       setSource("error");
       setError(message);
+      return false;
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
   }, [applyIncomingVehicles]);
 
   useEffect(() => {
-    void fetchVehicles();
+    let fastRefreshId: number | null = null;
+
+    void fetchVehicles(true).then((ok) => {
+      if (ok) {
+        fastRefreshId = window.setTimeout(() => {
+          void fetchVehicles(false);
+        }, INITIAL_FAST_REFRESH_MS);
+      }
+    });
+
     const interval = window.setInterval(() => {
-      void fetchVehicles();
+      void fetchVehicles(false);
     }, REFRESH_SECONDS * 1000);
 
-    return () => window.clearInterval(interval);
+    return () => {
+      if (fastRefreshId !== null) {
+        window.clearTimeout(fastRefreshId);
+      }
+
+      window.clearInterval(interval);
+    };
   }, [fetchVehicles]);
 
   useEffect(() => {
@@ -397,6 +432,10 @@ export default function TransitMap() {
     () => selectedRouteSplit.future.map((point) => [point.lat, point.lng] as [number, number]),
     [selectedRouteSplit]
   );
+  const selectedRouteColor = useMemo(
+    () => getRouteColor(selectedVehicle?.type ?? "unknown"),
+    [selectedVehicle?.type]
+  );
   const centerSelectedVehicle = useCallback(() => {
     if (!selectedVehicle || !mapRef.current) {
       return;
@@ -445,7 +484,7 @@ export default function TransitMap() {
         {selectedRouteFuturePositions.length > 1 ? (
           <Polyline
             positions={selectedRouteFuturePositions}
-            pathOptions={{ color: "#f97316", weight: 5, opacity: 0.92, dashArray: "10 10" }}
+            pathOptions={{ color: selectedRouteColor, weight: 5, opacity: 0.92, dashArray: "10 10" }}
           />
         ) : null}
         {selectedTrailPositions.length > 1 ? (
@@ -467,7 +506,7 @@ export default function TransitMap() {
             key={`${stop.name ?? "stop"}-${index}`}
             center={[stop.lat, stop.lng]}
             radius={4}
-            pathOptions={{ color: "#fed7aa", fillColor: "#f97316", fillOpacity: 0.9, weight: 2 }}
+            pathOptions={{ color: "#f8fafc", fillColor: selectedRouteColor, fillOpacity: 0.9, weight: 2 }}
           >
             {stop.name ? <Tooltip>{stop.name}</Tooltip> : null}
           </CircleMarker>
@@ -594,7 +633,10 @@ export default function TransitMap() {
             <div className="mt-3 space-y-1 text-xs text-slate-300">
               <div className="flex items-center gap-2"><i className="h-1 w-8 rounded bg-sky-400" />{historySource === "postgis" ? "Historie" : "Stopa"}</div>
               <div className="flex items-center gap-2"><i className="h-1 w-8 rounded bg-slate-400" />Projetá trasa</div>
-              <div className="flex items-center gap-2"><i className="h-1 w-8 rounded border border-orange-300 bg-orange-500" />Další trasa</div>
+              <div className="flex items-center gap-2">
+                <i className="h-1 w-8 rounded border border-white/50" style={{ backgroundColor: selectedRouteColor }} />
+                Další trasa
+              </div>
             </div>
 
             {routeLoading ? (
