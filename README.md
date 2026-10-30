@@ -2,7 +2,7 @@
 
 Webový prototyp pro sledování aktuálních poloh vozidel MHD v Ostravě. Aplikace zobrazuje vozidla na Leaflet mapě, ukládá historii poloh a animuje přesun markerů mezi aktualizacemi.
 
-![Screenshot placeholder](./docs/screenshot-placeholder.svg)
+
 
 ## Co prototyp umí
 
