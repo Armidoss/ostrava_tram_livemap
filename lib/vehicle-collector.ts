@@ -10,7 +10,7 @@ export type VehicleCollectionResult = {
   error?: string;
 };
 
-export async function collectVehiclePositions(): Promise<VehicleCollectionResult> {
+async function collectUncached(): Promise<VehicleCollectionResult> {
   try {
     const vehicles = await fetchMpvnetVehicles();
     const persisted = await savePositionsSafely(vehicles, "mpvnet");
@@ -21,15 +21,15 @@ export async function collectVehiclePositions(): Promise<VehicleCollectionResult
       saved: persisted ? vehicles.length : 0,
       persisted
     };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown MPVnet fetch error";
+  } catch {
+    const message = "MPVnet není dostupný. Zobrazuji ukázková data.";
 
     if (process.env.NODE_ENV === "development") {
-      console.debug("[collector] Falling back to demo data:", message);
+      console.debug("[collector] Falling back to demo data:");
     }
 
     const vehicles = getDemoVehicles();
-    const persisted = await savePositionsSafely(vehicles, "demo");
+    const persisted = false;
 
     return {
       source: "demo",
@@ -43,14 +43,27 @@ export async function collectVehiclePositions(): Promise<VehicleCollectionResult
 
 async function savePositionsSafely(vehicles: Vehicle[], source: VehicleSource): Promise<boolean> {
   try {
+    if (!process.env.DATABASE_URL) return false;
     await saveVehiclePositions(vehicles, source);
     return true;
-  } catch (error) {
+  } catch {
     if (process.env.NODE_ENV === "development") {
-      const message = error instanceof Error ? error.message : "Unknown database write error";
-      console.debug("[collector] Skipping PostGIS persistence:", message);
+      console.debug("[collector] Skipping PostGIS persistence:");
     }
 
     return false;
   }
+}
+
+// A warm process shares both in-flight work and a short snapshot; no cross-instance guarantee.
+let snapshot: { result: VehicleCollectionResult; expires: number } | undefined;
+let pending: Promise<VehicleCollectionResult> | undefined;
+export function collectVehiclePositions(): Promise<VehicleCollectionResult> {
+  if (snapshot && Date.now() < snapshot.expires) return Promise.resolve(snapshot.result);
+  if (pending) return pending;
+  pending = collectUncached().then(result => {
+    snapshot = { result, expires: Date.now() + 8000 };
+    return result;
+  }).finally(() => { pending = undefined; });
+  return pending;
 }

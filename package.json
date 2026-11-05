@@ -7,7 +7,9 @@
     "dev:clean": "rm -rf .next && next dev -H 127.0.0.1 -p 3003",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "eslint .",
+    "test": "node --import ./tests/aliases.mjs --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@types/pg": "^8.20.0",

@@ -2,11 +2,8 @@ import type { RoutePoint, Vehicle, VehicleRouteRequest, VehicleSource } from "@/
 import { Pool } from "pg";
 
 declare global {
-  // eslint-disable-next-line no-var
   var __ostravaTramPool: Pool | undefined;
-  // eslint-disable-next-line no-var
   var __ostravaTramSchemaReady: Promise<void> | undefined;
-  // eslint-disable-next-line no-var
   var __ostravaTramDbUnavailableUntil: number | undefined;
 }
 
@@ -151,7 +148,7 @@ export async function getCachedVehicleRoute(routeRequest: VehicleRouteRequest): 
     `
       SELECT route, stops, geometry_available
       FROM vehicle_routes
-      WHERE route_key = $1
+      WHERE route_key = $1 AND fetched_at > now() - interval '6 hours'
       LIMIT 1;
     `,
     [getRouteKey(routeRequest)]
@@ -303,6 +300,7 @@ export async function getVehicleHistory(vehicleId: string, minutes: number): Pro
         observed_at
       FROM vehicle_positions
       WHERE vehicle_id = $1
+        AND source = 'mpvnet'
         AND observed_at >= now() - ($2::int * interval '1 minute')
       ORDER BY observed_at ASC
       LIMIT 2000;

@@ -15,28 +15,27 @@ export async function GET(request: Request, { params }: Params) {
   const url = new URL(request.url);
   const minutes = Number(url.searchParams.get("minutes") ?? 60);
 
+  if (!vehicleId || vehicleId.length > 200 || /[\x00-\x1f]/.test(vehicleId) || !Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+    return NextResponse.json({ error: "Neplatné parametry." }, { status: 400 });
+  }
+
   try {
-    const history = await getVehicleHistory(decodeURIComponent(vehicleId), minutes);
+    const history = await getVehicleHistory(vehicleId, minutes);
 
     return NextResponse.json({
       source: "postgis",
       points: history
     });
-  } catch (error) {
-    const message =
-      error instanceof Error && error.message.trim().length > 0
-        ? error.message
-        : "PostGIS database is unavailable.";
-
+  } catch {
     if (process.env.NODE_ENV === "development") {
-      console.debug("[vehicle-history] Failed to load history:", message);
+      console.debug("[vehicle-history] Failed to load history:");
     }
 
     return NextResponse.json(
       {
         source: "unavailable",
         points: [],
-        error: message
+        error: "Historie není dostupná."
       },
       { status: 503 }
     );

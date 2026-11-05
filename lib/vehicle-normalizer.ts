@@ -42,6 +42,7 @@ function toNumber(value: unknown): number | null {
   }
 
   if (typeof value === "string") {
+    if (!value.trim()) return null;
     const parsed = Number(value.replace(",", "."));
     return Number.isFinite(parsed) ? parsed : null;
   }
@@ -142,16 +143,16 @@ function inferType(candidate: PlainObject, value: unknown, line: string | null):
     return "tram";
   }
 
-  if (["bus", "autobus", "buses"].includes(raw) || raw.includes("bus")) {
-    return "bus";
-  }
-
   if (
     ["trolleybus", "trolley", "troleybus", "trolejbus"].includes(raw) ||
     raw.includes("trolley") ||
     raw.includes("trolej")
   ) {
     return "trolleybus";
+  }
+
+  if (["bus", "autobus", "buses"].includes(raw) || raw.includes("bus")) {
+    return "bus";
   }
 
   const normalizedLine = line?.toUpperCase() ?? "";
@@ -240,21 +241,6 @@ function getCoordinates(obj: PlainObject): { lat: number; lng: number } | null {
   }
 
   return null;
-}
-
-function scoreVehicleLikeObject(obj: PlainObject): number {
-  let score = 0;
-  const hasCoordinates = getCoordinates(obj) !== null;
-
-  if (hasCoordinates) score += 4;
-  if (getFirstValue(obj, LINE_KEYS) !== null) score += 1;
-  if (getFirstValue(obj, ID_KEYS) !== null) score += 1;
-  if (getFirstValue(obj, TYPE_KEYS) !== null) score += 1;
-  if (obj.cn !== undefined) score += 2;
-  if (obj.t !== undefined) score += 1;
-  if (obj.n !== undefined) score += 1;
-
-  return score;
 }
 
 function isVehicleLikeObject(obj: PlainObject): boolean {

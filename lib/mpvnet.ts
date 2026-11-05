@@ -120,6 +120,7 @@ export async function fetchMpvnetVehicles(): Promise<Vehicle[]> {
   const endpoint = process.env.MPVNET_URL ?? "https://mpvnet.cz/odis/map/mapData";
 
   const response = await fetch(endpoint, {
+    signal: AbortSignal.timeout(8000),
     method: "POST",
     headers: {
       Accept: "application/json, text/plain, */*",
@@ -190,6 +191,7 @@ export async function fetchMpvnetRoute(routeRequest: VehicleRouteRequest): Promi
   };
 
   const response = await fetch(endpoint, {
+    signal: AbortSignal.timeout(8000),
     method: "POST",
     headers: {
       Accept: "application/json, text/plain, */*",
@@ -209,7 +211,7 @@ export async function fetchMpvnetRoute(routeRequest: VehicleRouteRequest): Promi
 
   const raw = (await response.json()) as { routeStops?: unknown; transmitters?: unknown };
   const routeStops = Array.isArray(raw.routeStops) ? raw.routeStops : [];
-  const points = routeStops.map(normalizeRoutePoint).filter((point): point is RoutePoint => point !== null);
+  const points = routeStops.slice(0, 5000).map(normalizeRoutePoint).filter((point): point is RoutePoint => point !== null);
   const stops = points.filter((point) => point.stop);
   const geometryAvailable = points.some((point) => !point.stop) || points.length > stops.length + 3;
 

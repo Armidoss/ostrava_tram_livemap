@@ -14,11 +14,12 @@ function isRouteRequest(value: unknown): value is VehicleRouteRequest {
   const candidate = value as Partial<VehicleRouteRequest>;
   return (
     typeof candidate.num1 === "string" &&
-    candidate.num1.length > 0 &&
+    /^[\p{L}\p{N} _./-]{1,64}$/u.test(candidate.num1) &&
     typeof candidate.num2 === "string" &&
-    candidate.num2.length > 0 &&
+    /^[\p{L}\p{N} _./-]{1,64}$/u.test(candidate.num2) &&
     typeof candidate.cat === "number" &&
-    Number.isFinite(candidate.cat)
+    Number.isInteger(candidate.cat) && candidate.cat >= 0 && candidate.cat <= 100 &&
+    (candidate.carrier == null || (typeof candidate.carrier === "string" && /^[a-zA-Z0-9_-]{1,64}$/.test(candidate.carrier)) || (typeof candidate.carrier === "number" && Number.isSafeInteger(candidate.carrier) && candidate.carrier >= 0))
   );
 }
 
@@ -61,11 +62,10 @@ export async function POST(request: Request) {
       geometryAvailable: result.geometryAvailable,
       error: result.geometryAvailable ? undefined : "Trasa není dostupná."
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown MPVnet route error";
+  } catch {
 
     if (process.env.NODE_ENV === "development") {
-      console.debug("[vehicle-route] Route lookup failed:", message);
+      console.debug("[vehicle-route] Route lookup failed:");
     }
 
     return NextResponse.json<VehicleRouteResponse>(
@@ -84,10 +84,9 @@ export async function POST(request: Request) {
 async function getCachedRouteSafely(routeRequest: VehicleRouteRequest) {
   try {
     return await getCachedVehicleRoute(routeRequest);
-  } catch (error) {
+  } catch {
     if (process.env.NODE_ENV === "development") {
-      const message = error instanceof Error ? error.message : "Unknown route cache read error";
-      console.debug("[vehicle-route] Route cache read failed:", message);
+        console.debug("[vehicle-route] Route cache read failed:");
     }
 
     return null;
@@ -102,10 +101,9 @@ async function saveRouteSafely(
 ) {
   try {
     await saveVehicleRoute(routeRequest, route, stops, geometryAvailable);
-  } catch (error) {
+  } catch {
     if (process.env.NODE_ENV === "development") {
-      const message = error instanceof Error ? error.message : "Unknown route cache write error";
-      console.debug("[vehicle-route] Route cache write failed:", message);
+        console.debug("[vehicle-route] Route cache write failed:");
     }
   }
 }

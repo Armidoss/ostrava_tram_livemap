@@ -2,6 +2,7 @@
 
 import type { Vehicle } from "@/types/vehicle";
 import L from "leaflet";
+import { createMarkerElement } from "@/lib/marker-element";
 import { useMemo } from "react";
 import { Marker, Popup } from "react-leaflet";
 
@@ -55,12 +56,11 @@ export default function VehicleMarker({ vehicle, selected = false, onSelect }: V
   const icon = useMemo(() => {
     const typeClass = vehicle.stale ? "vehicle-marker--stale" : `vehicle-marker--${vehicle.type}`;
     const rotation = vehicle.bearing ?? 0;
-    const line = vehicle.line ?? "?";
-    const selectedClass = selected ? "vehicle-marker--selected" : "";
+    const element = createMarkerElement(vehicle.line, typeClass, selected, rotation);
 
     return L.divIcon({
       className: "",
-      html: `<div class="vehicle-marker ${typeClass} ${selectedClass}"><i class="vehicle-marker__direction" style="transform: translate(-50%, -50%) rotate(${rotation}deg)"></i><span>${line}</span></div>`,
+      html: element,
       iconSize: [34, 34],
       iconAnchor: [17, 17],
       popupAnchor: [0, -18]

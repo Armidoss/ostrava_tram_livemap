@@ -1,140 +1,59 @@
 # Ostrava Tram Live
 
-Webový prototyp pro sledování aktuálních poloh vozidel MHD v Ostravě. Aplikace zobrazuje vozidla na Leaflet mapě, ukládá historii poloh a animuje přesun markerů mezi aktualizacemi.
+Česká mapa poloh MHD v Ostravě pro demonstraci práce s externími daty a geografickým rozhraním. Jde o near-real-time polling, nikoli nepřetržitý živý přenos. Nejde o oficiální aplikaci dopravce.
 
+## Architektura
 
+Next.js 15 App Router, React 19, striktní TypeScript, React Leaflet / Leaflet, Tailwind a vlastní CSS. Prohlížeč volá `/api/vehicles` každých 10 sekund. Server načte MPVnet, normalizuje alternativní JSON struktury, odmítne neplatné souřadnice a odstraní duplicitní ID. Osmisekundová cache jednoho procesu sdílí i rozpracovaný požadavek, včetně zápisu do volitelného PostgreSQL/PostGIS. Upstream má osm sekund na odpověď.
 
-## Co prototyp umí
+Při chybě se zobrazují výslovně označená simulovaná demo vozidla; neukládají se do databáze. Animace interpoluje mezi snímky, nejde o měření skutečné trajektorie mezi nimi. Chybějící vozidla jsou šedá a po 30 sekundách od posledního přijetí zmizí. Čas normalizované polohy představuje přijetí dat, nikoli ověřený čas GPS měření.
 
-- server-side proxy endpoint `GET /api/vehicles`
-- primární pokus o načtení dat z neoficiálního MPVnet ODIS endpointu
-- robustní normalizaci odpovědi s různými možnými názvy polí
-- demo fallback, když MPVnet neodpovídá nebo se nepodaří najít vozidla
-- full-screen mapu Ostravy přes OpenStreetMap tiles
-- filtr podle typu vozidla: Vše, Tram, Bus, Trolejbus, Neznámé
-- panel se stavem zdroje, počtem vozidel, počtem tramvají a časem aktualizace
-- plynulý pohyb markerů pomocí `requestAnimationFrame`
-- pevný 10sekundový interval obnovy sladěný s animací markerů
-- stale režim: vozidla zmizelá z odpovědi zůstávají ještě 30 sekund šedá
-- jednoduchý výpočet headingu markeru funkcí `calculateBearing()`
-- klik na vozidlo načte dostupnou trasu z reverse-engineered MPVnet `map/getRoute`
-- úspěšně načtené trasy se ukládají do PostGIS cache podle parametrů linky/spoje
-- volitelné ukládání poloh do PostGIS, takže kliknuté vozidlo může zobrazit historickou GPS stopu i po refreshi stránky
+Výběr vozidla načte plánovanou trasu a historii. Nový výběr zruší předchozí požadavky. PostGIS historie obsahuje skutečně přijaté snímky, stopa relace existuje jen v prohlížeči. Rozdělení plánované trasy na projetou a zbývající část je geometrický odhad. Cache tras v databázi vyprší po šesti hodinách.
 
-## Zdroj dat
+## Lokální spuštění
 
-Projekt používá neoficiální/reverse-engineered endpoint:
+Použijte Node.js 24 (testy používají nativní TypeScript stripping a module hooks).
 
-```txt
-POST https://mpvnet.cz/odis/map/mapData
-```
-
-Endpoint není veřejně dokumentované API. Struktura odpovědi se může změnit, dostupnost není garantovaná a provozovatel může změnit pravidla přístupu. Proto aplikace používá backend proxy, tolerantní parser a demo fallback.
-
-## Spuštění
-
-```bash
-npm install
+```sh
+npm ci
+cp .env.example .env
 npm run dev
 ```
 
-Potom otevři:
+Otevřete http://localhost:3003. Pro demo není databáze nutná. Konfigurace:
 
-```txt
-http://localhost:3003
-```
+| Proměnná | Význam |
+| --- | --- |
+| MPVNET_URL | Serverový endpoint poloh |
+| MPVNET_ROUTE_URL | Serverový endpoint tras |
+| DATABASE_URL | Volitelné připojení PostgreSQL/PostGIS |
+| CRON_SECRET | Náhodný tajný token pro `Authorization: Bearer …` na `/api/collect` |
 
-Vývojový server je v `package.json` nastavený pevně na port `3003`.
+`.env` nesmí být sledován Gitem. Příklad hesla v Compose je pouze pro lokální vývoj. Port databáze je vázán na 127.0.0.1.
 
-## PostGIS
-
-Pro lokální databázi spusť:
-
-```bash
+```sh
 docker compose up -d
+npm test
+npm run lint
+npm run typecheck
+npm run build
+npm start
 ```
 
-Databáze používá image `postgis/postgis:16-3.4` a inicializační migraci v `db/migrations/001_init.sql`.
-Tabulka `vehicle_positions` ukládá ID vozidla, linku, typ, zpoždění, cíl, zdroj dat, čas pozorování, surový JSON a geometrii `GEOGRAPHY(Point, 4326)`.
-Tabulka `vehicle_routes` ukládá geometrii a zastávky tras načtených přes MPVnet, takže opakovaný klik na stejný spoj může použít lokální cache.
+Migrace se automaticky inicializuje při vytvoření nového databázového svazku. Server také používá idempotentní inicializaci schématu; produkce potřebuje odpovídající oprávnění nebo předem připravené schéma. Žádné mazání dat není potřeba.
 
-Ukládání běží automaticky při každém pollingu `GET /api/vehicles`. Pokud databáze není dostupná, aplikace pokračuje bez pádu a pouze přeskočí persistenci.
+## Nasazení a omezení
 
-Historii jednoho vozidla vrací:
+Na Vercelu nastavte serverové proměnné včetně CRON_SECRET. Chybějící secret vrací 503, chybné přihlášení 401. `vercel.json` zachovává denní cron v 03:00 UTC: ten neprodukuje kontinuální historii. Aktivní uživatelé vyvolávají další sběr přes mapové API.
 
-```txt
-GET /api/vehicle-history/:vehicleId?minutes=180
-```
+Cache je pouze lokální pro teplý proces; více serverless instancí má oddělené cache a může provádět duplicitní sběr. Další krok je centrální plánovaný collector a sdílená cache (např. PostgreSQL/Redis), ze které čte API. Frekvenci je nutné sladit s tarifem hostingu a pravidly zdroje. Pro veřejný provoz zbývá rate limiting, retence historie a oddělení zápisového účtu od čtecího API.
 
-Na mapě se PostGIS historie použije po kliknutí na vozidlo. Pokud pro vozidlo ještě nejsou uložené body, UI zobrazí jen GPS stopu nasbíranou v aktuální browser session.
+MPVnet je neoficiální endpoint bez garantovaného schématu. Identita bez stabilního upstream ID může být odvozena z polohy a není spolehlivá pro dlouhou historii. Prázdná/nepoužitelná odpověď vyvolá označený fallback. Mapové dlaždice vyžadují síť a respektování pravidel OpenStreetMap.
 
-## Vercel Cron
+Historie Git obsahovala `.env`; odebrání z indexu neodstraní staré commity. Pokud obsahovaly skutečné přihlašovací údaje, ručně je rotujte. Historie nebyla přepisována. Živé MPVnet připojení a integrační test PostGIS nejsou součástí deterministických jednotkových testů.
 
-Projekt obsahuje cron collector pro produkční běh na Vercelu:
+## Stav ověření této úpravy
 
-```txt
-GET /api/collect
-```
+Deterministické testy pokrývají normalizaci, duplicity, textové vykreslení markeru, autentizaci sběru, validaci API, řízený fallback, deduplikaci souběžného sběru a SQL podmínku expirace cache (bez skutečné databáze). Skutečné čekání na timeout a závod výběru v prohlížeči zatím nemají integrační test. Desktopové a mobilní screenshoty nebyly pořízeny; vizuální kontrola zůstává nedokončená.
 
-Endpoint stáhne aktuální data z MPVnet, uloží normalizované pozice do PostGIS a vrátí krátký souhrn kolekce. Konfigurace ve `vercel.json` ho spouští jednou denně ve 03:00 UTC:
-
-```json
-{
-  "crons": [
-    {
-      "path": "/api/collect",
-      "schedule": "0 3 * * *"
-    }
-  ]
-}
-```
-
-Pro produkci nastav ve Vercelu `CRON_SECRET`. Endpoint potom vyžaduje hlavičku:
-
-```txt
-Authorization: Bearer <CRON_SECRET>
-```
-
-Bez `CRON_SECRET` jde endpoint zavolat ručně, což je pohodlné pro lokální vývoj.
-
-## Konfigurace
-
-V `.env` nebo `.env.local`:
-
-```env
-MPVNET_URL=https://mpvnet.cz/odis/map/mapData
-MPVNET_ROUTE_URL=https://mpvnet.cz/odis/map/getRoute
-DATABASE_URL=postgres://tramvaj:tramvaj@localhost:5432/ostrava_tram_live
-CRON_SECRET=replace-with-a-long-random-secret-in-production
-```
-
-`MPVNET_URL` nastavuje server-side endpoint pro proxy. `MPVNET_ROUTE_URL` nastavuje endpoint pro plánované trasy. `DATABASE_URL` zapíná PostGIS persistenci. `CRON_SECRET` chrání produkční collector endpoint. Klient obnovuje data pevně každých 10 sekund.
-
-## Struktura
-
-```txt
-app/page.tsx
-app/api/collect/route.ts
-app/api/vehicles/route.ts
-app/api/vehicle-history/[vehicleId]/route.ts
-components/TransitMap.tsx
-components/TransitMapLeaflet.tsx
-components/VehicleMarker.tsx
-components/VehiclePanel.tsx
-db/migrations/001_init.sql
-docker-compose.yml
-lib/db.ts
-lib/mpvnet.ts
-lib/vehicle-collector.ts
-lib/vehicle-normalizer.ts
-types/vehicle.ts
-vercel.json
-```
-
-## Další plán
-
-- reliability score pro zdroj dat a jednotlivé linky
-- heatmapa zpoždění
-- statistiky linek a intervalů
-- PostGIS prostorové dotazy nad zastávkami a úseky linek
-- dlouhodobá archivace s retencí a agregacemi
+Po kompatibilních bezpečnostních aktualizacích npm audit hlásí 9 nálezů (7 moderate, 2 high), včetně vnořeného PostCSS v Next.js. Doporučený automatický fix části nálezů vyžaduje Next.js 16; nebyl použit. Před veřejným produkčním nasazením je nutné nálezy znovu vyhodnotit a připravit ověřený upgrade/patch.

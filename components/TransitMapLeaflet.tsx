@@ -130,7 +130,7 @@ function toDisplayVehicle(animation: VehicleAnimation, now: number): DisplayVehi
     lat: animation.fromLat + (animation.toLat - animation.fromLat) * linearProgress,
     lng: animation.fromLng + (animation.toLng - animation.fromLng) * linearProgress,
     bearing: animation.bearing,
-    stale: animation.stale,
+    stale: animation.stale || now - animation.lastSeenAt > 20000,
     lastSeenAt: animation.lastSeenAt
   };
 }
@@ -148,13 +148,15 @@ export default function TransitMap() {
   const [historySource, setHistorySource] = useState<VehicleHistoryResponse["source"] | "session">("session");
   const [selectedPanelCollapsed, setSelectedPanelCollapsed] = useState(false);
   const [routeLoading, setRouteLoading] = useState(false);
-  const [trailVersion, setTrailVersion] = useState(0);
+  const [, setTrailVersion] = useState(0);
 
   const animationsRef = useRef<Map<string, VehicleAnimation>>(new Map());
   const vehiclesRef = useRef<DisplayVehicle[]>([]);
   const trailsRef = useRef<Map<string, TrailPoint[]>>(new Map());
   const frameRef = useRef<number | null>(null);
   const mapRef = useRef<LeafletMap | null>(null);
+  const selectionRequest = useRef<AbortController | null>(null);
+  useEffect(() => () => selectionRequest.current?.abort(), []);
   const sheetDragStartYRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -163,7 +165,7 @@ export default function TransitMap() {
 
   const applyIncomingVehicles = useCallback((incoming: Vehicle[]) => {
     const now = Date.now();
-    const durationMs = Math.round(REFRESH_SECONDS * 1000 * ANIMATION_DURATION_MULTIPLIER);
+    const durationMs = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : Math.round(REFRESH_SECONDS * 1000 * ANIMATION_DURATION_MULTIPLIER);
     const currentById = new Map(vehiclesRef.current.map((vehicle) => [vehicle.id, vehicle]));
     const incomingIds = new Set(incoming.map((vehicle) => vehicle.id));
     const nextAnimations = new Map<string, VehicleAnimation>();
@@ -227,17 +229,21 @@ export default function TransitMap() {
   }, []);
 
   const selectVehicle = useCallback(async (vehicle: DisplayVehicle) => {
+    selectionRequest.current?.abort();
+    const controller = new AbortController();
+    selectionRequest.current = controller;
+    setRouteLoading(false);
     setSelectedVehicleId(vehicle.id);
     setSelectedRoute(null);
     setPersistedTrail([]);
     setHistorySource("session");
     setSelectedPanelCollapsed(false);
 
-    void fetch(`/api/vehicle-history/${encodeURIComponent(vehicle.id)}?minutes=180`, { cache: "no-store" })
+    void fetch(`/api/vehicle-history/${encodeURIComponent(vehicle.id)}?minutes=180`, { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
         const data = (await response.json()) as VehicleHistoryResponse;
 
-        if (response.ok && data.points.length > 0) {
+        if (!controller.signal.aborted && response.ok && data.points.length > 0) {
           setPersistedTrail(data.points);
           setHistorySource(data.source);
         }
@@ -268,10 +274,12 @@ export default function TransitMap() {
         headers: {
           "Content-Type": "application/json"
         },
+        signal: controller.signal,
         body: JSON.stringify(vehicle.routeRequest)
       });
       const data = (await response.json()) as VehicleRouteResponse;
 
+      if (controller.signal.aborted) return;
       if (!response.ok || data.route.length < 2) {
         throw new Error("Trasa není dostupná.");
       }
@@ -285,6 +293,7 @@ export default function TransitMap() {
         error: data.error ?? null
       });
     } catch (routeError) {
+      if (controller.signal.aborted) return;
       const message = routeError instanceof Error ? routeError.message : "Trasa není dostupná.";
 
       if (process.env.NODE_ENV === "development") {
@@ -300,7 +309,7 @@ export default function TransitMap() {
         error: message
       });
     } finally {
-      setRouteLoading(false);
+      if (!controller.signal.aborted) setRouteLoading(false);
     }
   }, []);
 
@@ -319,7 +328,7 @@ export default function TransitMap() {
       const data = (await response.json()) as VehiclesResponse;
       setSource(data.source);
       setError(data.error ?? null);
-      setLastRefresh(new Date());
+      setLastRefresh(new Date(data.vehicles[0]?.lastUpdate ?? Date.now()));
       applyIncomingVehicles(data.vehicles);
       return true;
     } catch (fetchError) {
@@ -405,7 +414,7 @@ export default function TransitMap() {
     () => vehicles.find((vehicle) => vehicle.id === selectedVehicleId) ?? null,
     [selectedVehicleId, vehicles]
   );
-  const selectedTrail = useMemo(() => {
+  const selectedTrail = (() => {
     if (!selectedVehicleId) {
       return [];
     }
@@ -415,7 +424,7 @@ export default function TransitMap() {
     }
 
     return trailsRef.current.get(selectedVehicleId) ?? [];
-  }, [persistedTrail, selectedVehicleId, trailVersion]);
+  })();
   const selectedTrailPositions = useMemo(
     () => selectedTrail.map((point) => [point.lat, point.lng] as [number, number]),
     [selectedTrail]
@@ -469,8 +478,8 @@ export default function TransitMap() {
   }, []);
 
   return (
-    <main className="relative h-screen w-screen bg-ink">
-      <MapContainer ref={mapRef} center={OSTRAVA_CENTER} zoom={13} minZoom={10} maxZoom={18} zoomControl={false}>
+    <main className="transit-app relative h-screen w-screen bg-ink">
+      <MapContainer ref={mapRef} center={OSTRAVA_CENTER} zoom={13} minZoom={10} maxZoom={18} zoomControl={true}>
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -559,7 +568,7 @@ export default function TransitMap() {
               <span className="rounded-full bg-white/10 px-2.5 py-1 text-xs text-slate-200 ring-1 ring-white/10">Nahoru</span>
             </button>
           ) : (
-          <div className="pointer-events-auto max-h-[78vh] w-full overflow-hidden rounded-t-2xl border border-white/10 bg-[#11161d]/95 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] text-sm text-slate-100 shadow-panel backdrop-blur-xl sm:max-h-[80vh] sm:w-[min(92vw,360px)] sm:rounded-md sm:pb-3">
+          <div className="vehicle-detail pointer-events-auto max-h-[52vh] w-full overflow-y-auto rounded-t-2xl border border-white/10 bg-[#11161d]/95 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] text-sm text-slate-100 shadow-panel backdrop-blur-xl sm:max-h-[80vh] sm:w-[min(92vw,360px)] sm:rounded-md sm:pb-3">
             <div
               className="mx-auto mb-3 flex h-7 w-24 touch-none items-center justify-center sm:mb-2"
               onPointerDown={(event) => startSheetDrag(event.clientY)}
@@ -569,7 +578,9 @@ export default function TransitMap() {
               }}
               role="button"
               tabIndex={0}
-              aria-label="Táhnout panel"
+              aria-label="Sbalit detail vozidla"
+              onClick={() => setSelectedPanelCollapsed(true)}
+              onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setSelectedPanelCollapsed(true); }}
             >
               <span className="h-1.5 w-12 rounded-full bg-white/25" />
             </div>
@@ -598,6 +609,7 @@ export default function TransitMap() {
                 <button
                   type="button"
                   onClick={() => {
+                    selectionRequest.current?.abort();
                     setSelectedVehicleId(null);
                     setSelectedRoute(null);
                     setPersistedTrail([]);
@@ -631,16 +643,16 @@ export default function TransitMap() {
             </div>
 
             <div className="mt-3 space-y-1 text-xs text-slate-300">
-              <div className="flex items-center gap-2"><i className="h-1 w-8 rounded bg-sky-400" />{historySource === "postgis" ? "Historie" : "Stopa"}</div>
-              <div className="flex items-center gap-2"><i className="h-1 w-8 rounded bg-slate-400" />Projetá trasa</div>
+              <div className="flex items-center gap-2"><i className="h-1 w-8 rounded bg-sky-400" />{historySource === "postgis" ? "Historie z PostGIS" : "Stopa v této relaci"}</div>
+              <div className="flex items-center gap-2"><i className="h-1 w-8 rounded bg-slate-400" />Odhad projeté části</div>
               <div className="flex items-center gap-2">
                 <i className="h-1 w-8 rounded border border-white/50" style={{ backgroundColor: selectedRouteColor }} />
-                Další trasa
+                Plánovaná trasa
               </div>
             </div>
 
             {routeLoading ? (
-              <div className="mt-3 rounded-md border border-sky-300/20 bg-sky-400/10 px-3 py-2 text-sky-100">Načítám trasu...</div>
+              <div role="status" className="mt-3 rounded-md border border-sky-300/20 bg-sky-400/10 px-3 py-2 text-sky-100">Načítám trasu…</div>
             ) : null}
 
             {selectedRoute?.error ? (

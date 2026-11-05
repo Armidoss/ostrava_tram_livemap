@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: tramvaj
       POSTGRES_PASSWORD: tramvaj
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgis-data:/var/lib/postgresql/data
       - ./db/migrations:/docker-entrypoint-initdb.d:ro
